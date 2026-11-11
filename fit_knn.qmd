@@ -1,0 +1,606 @@
+---
+title: 'Unit 4 (Classification): Fit KNN Models'
+author: "Dasey Dang"
+date: "`r lubridate::today()`"
+format: 
+  html: 
+    embed-resources: true
+    toc: true 
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+## General Instructions
+
+**NOTE:** If you have not yet worked through **`hw_unit_04_eda_cleaning.qmd`**, you are in the wrong place. Start there!
+
+To begin fitting models, you will use the following files:
+
+* Two Quarto (.qmd) files: **`hw_unit_04_fit_knn.qmd`**, & **`hw_unit_04_fit_rda.qmd`**)
+
+* **`titanic_test_cln_no_label.csv`** (already-cleaned held-out test data with outcome labels removed)
+
+* **`titanic_data_dictionary.png`**
+
+-----
+
+The data for this week's assignment (across all scripts) will be the Titanic dataset, which contains survival outcomes and passenger characteristics for the Titanic's passengers. You can find information about the dataset in the data dictionary (available for download from the course website). This is a popular dataset that has been used for machine learning competitions and is noted for being a fun and easy introduction into data science. There is tons of information on how others have worked with this dataset online, and you are encouraged to incorporate knowledge that others have gained if you want! However, only code from the class web book will be needed for full credit on this assignment.
+
+In this script, you will fit a series of `knn` models in your training data and use your validation data to select the best model. This script starts with reading in the `titanic_train.csv` & `titanic_val.csv` files that you created in the cleaning EDA script. Although this assignment does not have an explicit script for modeling EDA, we expect that you will have done some modeling EDA on your own to be able to do good feature engineering and fit good models. You should now have multiple examples of good modeling EDA (the web book and two modeling EDA homework keys). You do not need to turn in any code for modeling EDA that you complete.
+
+At the end of this assignment, you will select your best performing model across all `knn` and `rda` models that you fit. You will use the `titanic_test_cln_no_label.csv` file **only once** at the end of the assignment to generate your best model's predictions of the survived outcome in the held-out test set. We will assess everyone's predictions on the held-out set to determine the best fitting model in the class. **The winner gets a free lunch!**
+
+## Setup
+
+### Load tidy packages and handle conflicts
+```{r}
+library(tidyverse)
+library(tidymodels)
+
+options(conflicts.policy = "depends.ok")
+```
+
+### Load additional required packages and source
+
+Add packages (only what you need!)
+```{r}
+#| message: false
+#| warning: false
+
+library(discrim, exclude = "smoothness")
+library(kableExtra, exclude = "group_rows")
+library(janitor, include.only = c("clean_names", "tabyl"))
+```
+
+Source any function scripts (John's are already sourced for you, but you can change these or add your own function scripts, too!)
+```{r}
+#| message: false
+
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_plots.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_eda.R?raw=true")
+source("https://github.com/jjcurtin/lab_support/blob/main/fun_ml.R?raw=true")
+```
+
+### Specify other global settings
+```{r}
+#| include: false
+
+theme_set(theme_classic())
+options(tibble.width = Inf, dplyr.print_max=Inf)
+```
+
+### Paths
+In the chunk below, set path_data to the location of your cleaned data files. 
+```{r}
+path_data <- "homework/unit_04/data"
+```
+
+
+### Load data
+
+Read in data files for cleaned training, validation, and test data (generated in hw_unit_04_eda_cleaning.qmd).
+
+**Please load your data using the provided names**
+
+Use `here::here()` and relative path for your data.  Make sure your iaml project is open!
+```{r}
+data_trn <- read_csv(here::here(path_data, "titanic_train_cln.csv"),
+                     col_types = cols())
+data_val <- read_csv(here::here(path_data, "titanic_val_cln.csv"),
+                     show_col_types = FALSE)
+data_test <- read_csv(here::here(path_data, "titanic_test_cln.csv"),
+                      col_types = cols())
+```
+
+### Class variables
+
+Set appropriate variable classes (remember character classes should be factors).
+```{r}
+data_trn <- data_trn |> 
+  mutate(across(where(is.character), as.factor),
+    survived = as.factor(survived))
+
+data_val <- data_val |> 
+  mutate(across(where(is.character), as.factor),
+    survived = as.factor(survived))
+
+data_test <- data_test |> 
+  mutate(across(where(is.character), as.factor),
+    survived = as.factor(survived))
+```
+
+### Create tracking tibble
+
+Create an empty tracking tibble to track the validation error across the model configurations you will fit.
+```{r}
+error_val <- tibble(
+  model_id = character(),
+  recipe_id = character(),
+  k = integer(),
+  accuracy = double())
+
+error_val
+```
+
+## KNN Model Building Instructions
+
+You may consider as many KNN model configurations as you wish, but there are a few rules:
+
+* All models must use `survived` as the outcome variable
+* You must build at least 3 models (if you build 3 models, that is sufficient to receive full credit on this component of the assignment)
+* At least one model must include 2 or more numeric predictors
+* At least one model must include a categorical predictor with 3 or more levels
+* At least one model must include a categorical variable with levels that have been modified during feature engineering (NOT including dummy coding)
+* At least one model must engineer a feature that is derived from a raw predictor BEYOND transformation of a numeric variable or collapsing categorical variable levels (We want you to start thinking more elaborately and creatively about how to construct new features from the raw predictors)
+* At least one model must consider at least 3 values of *k*
+
+Your models may include as many other predictors as you like (e.g., your model satisfying the 2 numeric predictors requirement may include more than 2 numeric variables, categorical variables, etc.). Be as creative as you'd like!
+
+## KNN Model 1
+
+List out which required model components you are including for your first model (delete ones that do not apply):
+
+**2+ numeric predictors:** age, fare, n_sib_spouse, n_parent_child
+
+**Categorical > 2 levels:** embarked (3 levels)
+
+**Modified categorical (not dummy coding):** cabin_deck collapsed
+
+**3+ values of k:** fit k = 5, 15, 35
+
+**Creative engineered feature:** family_size = n_sib_spouse + n_parent_child + 1
+
+> This feature is meant to capture the total number of family members a passenger has on board, which may be more informative than the separate variables for siblings/spouses and parents/children. EDA showed that passengers with very large families had lower survival rates and passengers with no family had lower survival rates than those with small families.
+
+### Set up recipe
+
+Informed by EDA from your modeling EDA script, create a recipe for your first model.
+```{r}
+rec_m1 <- recipe(survived ~ ., data = data_trn) |>
+  update_role(passenger_id, new_role = "id") |>
+  step_select(
+    survived, passenger_id,
+    age, fare, n_sib_spouse, n_parent_child,
+    embarked, cabin) |>
+  step_mutate(family_size = n_sib_spouse + n_parent_child + 1) |>
+  step_mutate(
+    cabin_deck = case_when(
+      is.na(cabin) | cabin == "" ~ "Unknown",
+      TRUE ~ str_sub(cabin, 1, 1))) |>
+  step_other(cabin_deck, threshold = 0.05, other = "Other") |>
+  step_rm(cabin) |>
+  # llm helped me 
+  step_impute_median(all_numeric_predictors()) |>
+  step_unknown(all_nominal_predictors()) |>
+  step_novel(all_nominal_predictors()) |>
+  step_impute_mode(all_nominal_predictors()) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_dummy(all_nominal_predictors(), one_hot = TRUE)
+```
+
+### Training feature matrix
+
+Use the `prep()` function to prep your recipe.
+```{r}
+rec_m1_prep <- rec_m1 |> prep(training = data_trn)
+```
+
+Use the `bake()` function to generate the feature matrix of the training data.
+```{r}
+feat_trn_m1 <- rec_m1_prep |> bake(new_data = NULL)
+feat_val_m1 <- rec_m1_prep |> bake(new_data = data_val)
+
+# check
+ncol(feat_trn_m1) == ncol(feat_val_m1)
+```
+
+
+### Fit your model
+
+Fit a `knn` model predicting `survived` from your training feature matrix.
+```{r}
+fit_m1_k5 <- 
+  nearest_neighbor(neighbors = 5) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m1)
+
+fit_m1_k15 <- 
+  nearest_neighbor(neighbors = 15) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m1)
+
+fit_m1_k35 <- 
+  nearest_neighbor(neighbors = 35) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m1)
+```
+
+### Validation feature matrix
+
+Use `bake()` to generate the feature matrix of the validation data that we will use to assess your model.
+```{r}
+feat_val_m1 <- bake(rec_m1_prep, new_data = data_val)
+```
+
+### Assess your model
+
+Use `accuracy_vec()` to calculate the validation error (accuracy) of your model. Add this value to your validation error tracking tibble.
+```{r}
+# train accurary used only to easily compare to val acc
+acc_trn_k5  <- accuracy_vec(feat_trn_m1$survived, predict(fit_m1_k5,  feat_trn_m1)$.pred_class)
+acc_trn_k15 <- accuracy_vec(feat_trn_m1$survived, predict(fit_m1_k15, feat_trn_m1)$.pred_class)
+acc_trn_k35 <- accuracy_vec(feat_trn_m1$survived, predict(fit_m1_k35, feat_trn_m1)$.pred_class)
+
+acc_val_k5  <- accuracy_vec(feat_val_m1$survived, predict(fit_m1_k5,  feat_val_m1)$.pred_class)
+acc_val_k15 <- accuracy_vec(feat_val_m1$survived, predict(fit_m1_k15, feat_val_m1)$.pred_class)
+acc_val_k35 <- accuracy_vec(feat_val_m1$survived, predict(fit_m1_k35, feat_val_m1)$.pred_class)
+
+tibble(
+  k = c(5, 15, 35),
+  acc_trn = c(acc_trn_k5, acc_trn_k15, acc_trn_k35),
+  acc_val = c(acc_val_k5, acc_val_k15, acc_val_k35))
+
+error_val <- error_val |>
+  add_row(model_id = "knn_m1", recipe_id = "rec_m1", k = 5,  accuracy = acc_val_k5) |>
+  add_row(model_id = "knn_m1", recipe_id = "rec_m1", k = 15, accuracy = acc_val_k15) |>
+  add_row(model_id = "knn_m1", recipe_id = "rec_m1", k = 35, accuracy = acc_val_k35)
+```
+
+
+## KNN model configuration 2
+
+Indicate which required model components you are including for your second model (delete ones that do not apply):
+
+**2+ numeric predictors:** age, fare
+
+**Categorical > 2 levels:**embarked
+
+**Modified categorical:** binned age group (NOT dummy coding alone)
+
+**3+ values of k:** 5, 15, 35
+
+> removing high-cardinality cabin information to assess nonlinearity via age-based categories
+
+### Set up recipe
+
+Informed by EDA from your modeling EDA, create a recipe for your second model.
+```{r}
+rec_m2 <- recipe(survived ~ ., data = data_trn) |>
+  update_role(passenger_id, new_role = "id") |>
+  step_select(
+    survived, passenger_id,
+    age, fare, n_sib_spouse, n_parent_child,
+    sex, embarked) |>
+  step_mutate(
+    age_group = case_when(
+      age < 12  ~ "child",
+      age < 30  ~ "young_adult",
+      age < 55  ~ "adult",
+      age >= 55 ~ "older_adult",
+      TRUE ~ NA_character_)) |>
+  step_rm(age) |>
+  step_impute_median(all_numeric_predictors()) |>
+  step_unknown(all_nominal_predictors()) |>
+  step_novel(all_nominal_predictors()) |>
+  step_impute_mode(all_nominal_predictors()) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_dummy(all_nominal_predictors(), one_hot = TRUE)
+```
+
+### Training feature matrix
+
+Use the `prep()` function to prep your recipe.
+```{r}
+rec_m2_prep <- rec_m2 |> prep(training = data_trn)
+```
+
+Use the `bake()` function to generate the feature matrix of the training data.
+```{r}
+feat_trn_m2 <- rec_m2_prep |> bake(new_data = NULL)
+feat_val_m2 <- rec_m2_prep |> bake(new_data = data_val)
+```
+
+### Fit your model
+
+Fit a `knn` model predicting `survived` from your training feature matrix.
+```{r}
+fit_m2_k5 <- 
+  nearest_neighbor(neighbors = 5) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m2)
+
+fit_m2_k15 <- 
+  nearest_neighbor(neighbors = 15) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m2)
+
+fit_m2_k35 <- 
+  nearest_neighbor(neighbors = 35) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m2)
+```
+
+### Validation feature matrix
+
+Use `bake()` to generate the feature matrix of the validation data that we will use to assess your model.
+```{r}
+feat_val_m2 <- rec_m2_prep |> bake(new_data = data_val)
+```
+
+### Assess your model
+
+Use `accuracy_vec()` to calculate the validation error (accuracy) of your model. Add this value to your validation error tracking tibble.
+```{r}
+acc_trn_m2_k5  <- accuracy_vec(feat_trn_m2$survived, predict(fit_m2_k5,  feat_trn_m2)$.pred_class)
+acc_trn_m2_k15 <- accuracy_vec(feat_trn_m2$survived, predict(fit_m2_k15, feat_trn_m2)$.pred_class)
+acc_trn_m2_k35 <- accuracy_vec(feat_trn_m2$survived, predict(fit_m2_k35, feat_trn_m2)$.pred_class)
+
+acc_val_m2_k5  <- accuracy_vec(feat_val_m2$survived, predict(fit_m2_k5,  feat_val_m2)$.pred_class)
+acc_val_m2_k15 <- accuracy_vec(feat_val_m2$survived, predict(fit_m2_k15, feat_val_m2)$.pred_class)
+acc_val_m2_k35 <- accuracy_vec(feat_val_m2$survived, predict(fit_m2_k35, feat_val_m2)$.pred_class)
+
+tibble(
+  k = c(5, 15, 35),
+  acc_trn = c(acc_trn_m2_k5, acc_trn_m2_k15, acc_trn_m2_k35),
+  acc_val = c(acc_val_m2_k5, acc_val_m2_k15, acc_val_m2_k35))
+
+error_val <- error_val |>
+  add_row(model_id = "knn_m2", recipe_id = "rec_m2", k = 5,  accuracy = acc_val_m2_k5) |>
+  add_row(model_id = "knn_m2", recipe_id = "rec_m2", k = 15, accuracy = acc_val_m2_k15) |>
+  add_row(model_id = "knn_m2", recipe_id = "rec_m2", k = 35, accuracy = acc_val_m2_k35)
+```
+
+## KNN model configuration 3
+
+Indicate which required model components you are including for your third model (delete ones that do not apply):
+*2+ numeric predictors*
+*Categorical > 2 levels*
+*Modified categorical*
+*3+ values of k*
+*More creative feature engineering (when you add this component, please write one sentence stating how your modeling EDA informed what you chose)*
+
+**2+ numeric predictors:**age, fare
+
+**Categorical > 2 levels:** pclass (1 / 2 / 3)
+
+**Modified categorical:** fare_group (quantile bins)
+
+**3+ values of k:** 5, 15, 35
+
+**Creative engineered feature:** fare_per_person
+
+> `fare_per_person` to represent per-capita socioeconomic resources, which EDA suggested was more informative than raw fare when accounting for traveling with family
+
+### Set up recipe
+
+Informed by EDA from your modeling EDA script, create a recipe for your third model.
+```{r}
+rec_m3 <- recipe(survived ~ ., data = data_trn) |>
+  update_role(passenger_id, new_role = "id") |>
+  step_select(
+    survived, passenger_id,
+    age, fare, n_sib_spouse, n_parent_child,
+    pclass, sex) |>
+  step_mutate(
+    family_size = n_sib_spouse + n_parent_child + 1,
+    fare_per_person = fare / family_size) |>
+  step_mutate(
+    fare_group = cut(
+      fare,
+      breaks = quantile(fare, probs = seq(0, 1, 0.25), na.rm = TRUE),
+      include.lowest = TRUE,
+      labels = c("low", "mid_low", "mid_high", "high"))) |>
+  step_impute_median(all_numeric_predictors()) |>
+  step_unknown(all_nominal_predictors()) |>
+  step_novel(all_nominal_predictors()) |>
+  step_impute_mode(all_nominal_predictors()) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_dummy(all_nominal_predictors(), one_hot = TRUE)
+```
+
+### Training feature matrix
+
+Use the `prep()` function to prep your recipe.
+```{r}
+rec_m3_prep <- rec_m3 |> prep(training = data_trn)
+```
+
+Use the `bake()` function to generate the feature matrix of the training data.
+```{r}
+feat_trn_m3 <- rec_m3_prep |> bake(new_data = NULL)
+feat_val_m3 <- rec_m3_prep |> bake(new_data = data_val)
+```
+
+
+### Fit your model
+
+Fit a `knn` model predicting `survived` from your training feature matrix.
+```{r}
+fit_m3_k5 <- 
+  nearest_neighbor(neighbors = 5) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m3)
+
+fit_m3_k15 <- 
+  nearest_neighbor(neighbors = 15) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m3)
+
+fit_m3_k35 <- 
+  nearest_neighbor(neighbors = 35) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m3)
+```
+
+### Validation feature matrix
+
+Use `bake()` to generate the feature matrix of the validation data that we will use to assess your model.
+```{r}
+feat_val_m3 <- rec_m3_prep |> bake(new_data = data_val)
+```
+
+### Assess your model
+
+Use `accuracy_vec()` to calculate the validation error (accuracy) of your model. Add this value to your validation error tracking tibble.
+```{r}
+acc_trn_m3_k5  <- accuracy_vec(feat_trn_m3$survived, predict(fit_m3_k5,  feat_trn_m3)$.pred_class)
+acc_trn_m3_k15 <- accuracy_vec(feat_trn_m3$survived, predict(fit_m3_k15, feat_trn_m3)$.pred_class)
+acc_trn_m3_k35 <- accuracy_vec(feat_trn_m3$survived, predict(fit_m3_k35, feat_trn_m3)$.pred_class)
+
+acc_val_m3_k5  <- accuracy_vec(feat_val_m3$survived, predict(fit_m3_k5,  feat_val_m3)$.pred_class)
+acc_val_m3_k15 <- accuracy_vec(feat_val_m3$survived, predict(fit_m3_k15, feat_val_m3)$.pred_class)
+acc_val_m3_k35 <- accuracy_vec(feat_val_m3$survived, predict(fit_m3_k35, feat_val_m3)$.pred_class)
+
+tibble(
+  k = c(5, 15, 35),
+  acc_trn = c(acc_trn_m3_k5, acc_trn_m3_k15, acc_trn_m3_k35),
+  acc_val = c(acc_val_m3_k5, acc_val_m3_k15, acc_val_m3_k35))
+
+error_val <- error_val |>
+  add_row(model_id = "knn_m3", recipe_id = "rec_m3", k = 5,  accuracy = acc_val_m3_k5) |>
+  add_row(model_id = "knn_m3", recipe_id = "rec_m3", k = 15, accuracy = acc_val_m3_k15) |>
+  add_row(model_id = "knn_m3", recipe_id = "rec_m3", k = 35, accuracy = acc_val_m3_k35)
+```
+
+## Additional model configurations (Optional)
+
+Create as many code chunks as you would like below to test additional KNN model configurations. Record your models' performance in the validation data (accuracy) in your validation error tracking tibble.
+```{r}
+# m4 -> taking m2 and adding ticket_group as a categorical predictor with > 2 levels based on EDA showing ticket groups had different survival rates
+
+rec_m4 <- recipe(survived ~ ., data = data_trn) |>
+  update_role(passenger_id, new_role = "id") |>
+  step_select(
+    survived, passenger_id,
+    age, fare, n_sib_spouse, n_parent_child,
+    sex, embarked, ticket
+  ) |>
+  step_mutate(family_size = n_sib_spouse + n_parent_child + 1) |>
+  step_mutate(
+    ticket_group = case_when(
+      is.na(ticket) | ticket == "" ~ "Unknown",
+      str_detect(ticket, "^[A-Za-z]") ~ str_extract(ticket, "^[A-Za-z]+"),
+      TRUE ~ "NUM")) |>
+  step_other(ticket_group, threshold = 0.05, other = "Other") |>
+  step_rm(ticket) |>
+  step_impute_median(all_numeric_predictors()) |>
+  step_unknown(all_nominal_predictors()) |>
+  step_novel(all_nominal_predictors()) |>
+  step_impute_mode(all_nominal_predictors()) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_dummy(all_nominal_predictors(), one_hot = TRUE)
+
+rec_m4_prep <- rec_m4 |> prep(training = data_trn)
+
+feat_trn_m4 <- rec_m4_prep |> bake(new_data = NULL)
+feat_val_m4 <- rec_m4_prep |> bake(new_data = data_val)
+
+fit_m4_k5 <-
+  nearest_neighbor(neighbors = 5) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m4)
+
+fit_m4_k15 <-
+  nearest_neighbor(neighbors = 15) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m4)
+
+fit_m4_k35 <-
+  nearest_neighbor(neighbors = 35) |>
+  set_engine("kknn") |>
+  set_mode("classification") |>
+  fit(survived ~ ., data = feat_trn_m4)
+
+acc_val_m4_k5  <- accuracy_vec(feat_val_m4$survived, predict(fit_m4_k5,  feat_val_m4)$.pred_class)
+acc_val_m4_k15 <- accuracy_vec(feat_val_m4$survived, predict(fit_m4_k15, feat_val_m4)$.pred_class)
+acc_val_m4_k35 <- accuracy_vec(feat_val_m4$survived, predict(fit_m4_k35, feat_val_m4)$.pred_class)
+
+tibble(
+  k = c(5, 15, 35),
+  acc_val = c(acc_val_m4_k5, acc_val_m4_k15, acc_val_m4_k35))
+
+error_val <- error_val |>
+  add_row(model_id = "knn_m4", recipe_id = "rec_m4", k = 5,  accuracy = acc_val_m4_k5) |>
+  add_row(model_id = "knn_m4", recipe_id = "rec_m4", k = 15, accuracy = acc_val_m4_k15) |>
+  add_row(model_id = "knn_m4", recipe_id = "rec_m4", k = 35, accuracy = acc_val_m4_k35)
+```
+
+
+## Predictions
+
+This section is for generating predictions for your best model in the held-out test set. You should only generate predictions for **one model** out of all KNN and RDA models you fit across both model fitting files. We will use these predictions to generate your ONE estimate of model performance in the held-out data.
+
+If your **best** model is a KNN (from this script), follow the steps below. If your best model is a RDA (from your other script), skip the next section and **Save & Render** at the end of the document.
+
+### Assign best model
+
+If your **best** model is a `knn` from this script, edit the following objects in the code chunk below:
+
+* Assign the model object from your best model to `best_model`
+* Copy and paste the recipe for your best model (created from the training data) to assign to `best_rec` below.
+* Type your last name between the quotation marks of `last_name` (e.g. "janssen") for file naming.
+
+If your best model is a `rda`, don't edit anything in the next two code chunks and skip to the final section to save, render, etc.
+```{r}
+best_model <- NULL
+best_rec <- NA # best recipe
+last_name <- ""
+```
+
+### Generate test predictions
+
+Run this code chunk to save out your best model's predictions of `survived` in the held-out test set. Look over your predictions to confirm your model generated valid predictions for each test observation.
+(If you left `best_model` as NA above, no file will be saved out).
+
+ADVANCED NOTE:  You *could* improve this code below to train an even better model.  If you know what could be improved, do it.  If not, do not worry. This will work well enough (but maybe not for a free lunch!!).  
+```{r}
+if (!is.null(best_model)){
+  
+ # Make test set features with the best recipe
+  rec_prep <- best_rec |> 
+    prep(training = data_trn)
+  
+  feat_test <- rec_prep |> 
+    bake(new_data = data_test)
+  
+ # Generate predictions made by the best model
+  test_preds <- data_test |> 
+    mutate(survived = predict(best_model, feat_test)$.pred_class) |> 
+    select(passenger_id, survived) #passenger_id is the id variable to match predictions
+  
+  # Save predictions as a csv file with your last name in the file name
+   write.csv(test_preds, here::here(path_data,str_c("test_preds_", 
+                                                   last_name,
+                                                   ".csv")))
+}
+```
+
+
+## Save, Render, Upload
+
+### Save
+Save this `.qmd` file with your last name at the end (e.g. `hw_unit_3_knn_janssen.qmd`)
+Make sure you changed "Your name here" at the top of the file to be your own name. 
+
+### Render
+Render the file to html and upload your rendered html file to Canvas. 
+
+### Upload
+Upload your saved `test_preds_(lastname).csv` (if you created it in this script) to Canvas. We will assess everyones predictions in the test set. **The winner gets a high five from John in front of the whole class as well as a free lunch!!!**
+
+Don't forget to complete the RDA portion of this assignment `hw_unit_04_fit_rda.qmd` if you haven't already and submit it to Canvas.
+
+**Way to go!!**
+
