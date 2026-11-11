@@ -1,160 +1,56 @@
 ---
-title: 'Unit 4 (Classification): Fit RDA Models'
+title: "Titanic Survival Prediction with Discriminant Analysis"
 author: "Dasey Dang"
-date: "`r lubridate::today()`"
-format: 
-  html: 
+format:
+  html:
+    toc: true
+    code-fold: show
     embed-resources: true
-    toc: true 
-    toc_depth: 4
-editor_options: 
-  chunk_output_type: console
+execute:
+  message: false
 ---
 
-## General Instructions
+*UW–Madison · PSYC 752 Machine Learning*
 
-**NOTE:** If you have not yet worked through **`hw_unit_04_eda_cleaning.qmd`**, you are in the wrong place. Start there!
+Adapted from John Curtin’s Unit 4 classification lab and starter Quarto template. I developed the feature recipes, compared four configurations on the course validation split, and submitted predictions from the sex-by-passenger-class model. That submission placed first in the class’s held-out prediction challenge.
 
-To begin fitting models, you will use the following files:
+## Data and evaluation
 
-* Two Quarto (.qmd) files: **`hw_unit_04_fit_knn.qmd`**, & **`hw_unit_04_fit_rda.qmd`**)
+The outcome is passenger survival. I fit the preprocessing recipes and models on the training split and measured classification accuracy on the validation split. All four configurations use quadratic discriminant analysis (QDA), fitted through the regularized discriminant analysis interface with both covariance regularization parameters set to zero.
 
-* **`titanic_test_cln_no_label.csv`** (already-cleaned held-out test data with outcome labels removed)
+To render this report, install the R packages tidymodels, discrim, and klaR and put the cleaned course CSVs in a local `data/` directory next to this file. The training and validation files are required. The course test file is only needed to generate predictions. Run `quarto render fit_rda.qmd` from the repository root.
 
-* **`titanic_data_dictionary.png`**
-
------
-
-The data for this week's assignment (across all scripts) will be the Titanic dataset, which contains survival outcomes and passenger characteristics for the Titanic's passengers. You can find information about the dataset in the data dictionary (available for download from the course website). This is a popular dataset that has been used for machine learning competitions and is noted for being a fun and easy introduction into data science. There is tons of information on how others have worked with this dataset online, and you are encouraged to incorporate knowledge that others have gained if you want! However, only code from the class web book will be needed for full credit on this assignment.
-
-In this script, you will fit a series of `knn` models in your training data and use your validation data to select the best model. This script starts with reading in the `titanic_train.csv` & `titanic_val.csv` files that you created in the cleaning EDA script. Although this assignment does not have an explicit script for modeling EDA, we expect that you will have done some modeling EDA on your own to be able to do good feature engineering and fit good models. You should now have multiple examples of good modeling EDA (the web book and two modeling EDA homework keys). You do not need to turn in any code for modeling EDA that you complete.
-
-At the end of this assignment, you will select your best performing model across all `knn` and `rda` models that you fit. You will use the `titanic_test_cln_no_label.csv` file **only once** at the end of the assignment to generate your best model's predictions of the survived outcome in the held-out test set. We will assess everyone's predictions on the held-out set to determine the best fitting model in the class. **The winner gets a free lunch!**
-
-
-## Setup
-
-### Handle conflicts
 ```{r}
-library(tidyverse)
+#| label: setup
+
 library(tidymodels)
+library(discrim)
 
-options(conflicted.policy = "depends.ok")
+data_dir <- "data"
+
+read_split <- function(filename) {
+  read_csv(file.path(data_dir, filename), show_col_types = FALSE) |>
+    mutate(across(where(is.character), as.factor))
+}
+
+data_trn <- read_split("titanic_train_cln.csv") |>
+  mutate(survived = as.factor(survived))
+data_val <- read_split("titanic_val_cln.csv") |>
+  mutate(survived = as.factor(survived))
+
+qda_spec <- discrim_regularized(frac_common_cov = 0, frac_identity = 0) |>
+  set_engine("klaR")
 ```
 
-### Load required packages and source
+## Feature engineering
 
-Add packages (only what you need!)
+### Baseline with family size
+
+I combined the counts of accompanying relatives into a single family-size feature and log-transformed fare.
+
 ```{r}
-#| message: false
-#| warning: false
+#| label: recipe-1
 
-library(klaR)
-library(discrim, exclude = "smoothness")
-library(kableExtra, exclude = "group_rows")
-library(janitor, include.only = c("clean_names", "tabyl"))
-```
-
-Source any function scripts (John's are already sourced for you, but you can change these or add your own function scripts too)
-```{r}
-#| message: false
-
-source("https://github.com/jjcurtin/lab_support/blob/main/fun_plots.R?raw=true")
-source("https://github.com/jjcurtin/lab_support/blob/main/fun_eda.R?raw=true")
-source("https://github.com/jjcurtin/lab_support/blob/main/fun_ml.R?raw=true")
-```
-
-### Specify other global settings
-```{r}
-#| include: false
-
-theme_set(theme_classic())
-options(tibble.width = Inf, dplyr.print_max=Inf)
-```
-
-
-In the chunk below, set path_data to the location of your cleaned data files. 
-```{r}
-path_data <- "homework/unit_04/data"
-```
-
-
-### Read in data
-
-Read in data files for cleaned training, validation, and test data (generated in hw_unit_04_eda_cleaning.qmd). **Please load your data using the provided names**
-
-Use `here::here()` and relative path for your data.  Make sure your iaml project is open
-```{r}
-data_trn <- read_csv(here::here(path_data, "titanic_train_cln.csv"),
-                     col_types = cols())
-data_val <- read_csv(here::here(path_data, "titanic_val_cln.csv"),
-                     show_col_types = FALSE)
-data_test <- read_csv(here::here(path_data, "titanic_test_cln.csv"),
-                      col_types = cols())
-```
-
-### Class variables
-
-set appropriate variable classes (remember character classes should be factors)
-```{r}
-data_trn <- data_trn |> 
-  mutate(across(where(is.character), as.factor),
-    survived = as.factor(survived))
-
-data_val <- data_val |> 
-  mutate(across(where(is.character), as.factor),
-    survived = as.factor(survived))
-
-data_test <- data_test |> 
-  mutate(across(where(is.character), as.factor),
-    survived = as.factor(survived))
-```
-
-### Create tracking tibble
-
-Create an empty tracking tibble to track the validation error across the various model configurations you will fit.
-```{r}
-error_val <- tibble(
-  model_id = character(),
-  recipe_id = character(),
-  k = integer(),
-  accuracy = double())
-
-error_val_rda <- tibble(
-  model_id = character(),
-  recipe_id = character(),
-  accuracy = double())
-```
-
-## RDA model building instructions
-
-You may consider as many RDA model configurations as you wish, but there are a few rules:
-
-* All models must use `survived` as the outcome variable
-* You must build at least 3 models (if you build 3 models, that is sufficient to receive full credit on this component of the assignment)
-* At least one model must include a variable with missing data (you will need to handle that missingness before using the variable)
-* At least one model must include a transformation of a numeric variable
-* At least one model must include one additional feature engineering technique that you believe may improve model performance 
-* All models you fit should use the hyperparameter values associated with a QDA because you don't know how to tune hyperparameters yet. You can get more details on this in the web book, but the code needed for this appears in the model-fitting chunks below.
-
-Your models may include as many other predictors as you would like (e.g., your models may build off of each other). Be as creative as you'd like!
-
-## RDA model configuration 1
-
-Indicate which required model components you are including for your first model (delete ones that do not apply):
-
-*Variable with missingness:* age
-
-*Transformed numeric:* fare_log = log1p(fare)
-
-*Additional feature engineering:* family_size = n_sib_spouse + n_parent_child + 1
-
-> “alone vs with family” captures social grouping and priority effects better than the raw counts would alone
-
-### Set up recipe
-
-Informed by EDA from your modeling EDA, create a recipe for your first model.
-```{r}
 rec_rda_1 <- recipe(
   survived ~ age + fare + sex + n_sib_spouse + n_parent_child,
   data = data_trn) |>
@@ -168,76 +64,13 @@ rec_rda_1 <- recipe(
   step_normalize(all_numeric_predictors())
 ```
 
-### Training feature matrix
+### Fare per family member and log age
 
-Use the `prep()` function to prep your recipe
+I added passenger class and divided fare by recorded family size to explore a fare measure adjusted for group size. I used a log transform for age.
+
 ```{r}
-rec_rda_1_prep <- rec_rda_1 |> prep(training = data_trn)
-```
+#| label: recipe-2
 
-Use the `bake()` function to generate the feature matrix of the training data.
-```{r}
-feat_rda_1_trn <- rec_rda_1_prep |> bake(NULL)
-feat_rda_1_val <- rec_rda_1_prep |> bake(data_val)
-```
-
-### Fit your model
-
-Fit a `rda` model predicting `survived` from your training feature matrix.
-```{r}
-# use these hyperparamater values:
-# discrim_regularized(frac_common_cov = 0, frac_identity = 0)
-
-fit_rda_1 <-
-  discrim_regularized(frac_common_cov = 0, frac_identity = 0) |>
-  set_engine("klaR") |>
-  fit(survived ~ ., data = feat_rda_1_trn)
-```
-
-### Validation feature matrix
-
-Use `bake()` to generate the feature matrix of the validation data that we will use to assess your model.
-```{r}
-feat_rda_1_val <- rec_rda_1_prep |> bake(data_val)
-```
-
-### Assess your model
-
-Use `accuracy_vec()` to calculate the validation error (accuracy) of your model. Add this value to your validation error tracking tibble.
-```{r}
-acc_rda_1 <- accuracy_vec(
-  feat_rda_1_val$survived,
-  predict(fit_rda_1, feat_rda_1_val, type = "class")$.pred_class)
-
-error_val_rda <- error_val_rda |>
-  filter(model_id != "rda_1") |>
-  add_row(
-    model_id  = "rda_1",
-    recipe_id = "rec_rda_1",
-    accuracy  = acc_rda_1)
-
-acc_rda_1
-```
-
-## RDA model configuration 2
-
-Indicate which required model components you are including for your second model (delete ones that do not apply):
-*Variable with missingness*
-*Transformed numeric*
-*Additional feature engineering technique (when you add this component, please write one sentence stating how your modeling EDA informed what you chose)*
-
-*Variable with missingness:* age (imputed)
-
-*Transformed numeric:* age_child = log1p(age)
-
-*Additional feature engineering:* fare_per_person = fare / family_size
-
-> fare alone is confounded by group size; “resources per person” is a cleaner SES signal
-
-### Set up recipe
-
-Informed by EDA from your modeling EDA, create a recipe for your second model.
-```{r}
 rec_rda_2 <- recipe(
   survived ~ age + fare + sex + n_sib_spouse + n_parent_child + pclass,
   data = data_trn) |>
@@ -252,72 +85,13 @@ rec_rda_2 <- recipe(
   step_normalize(all_numeric_predictors())
 ```
 
-### Training feature matrix
+### Sex by passenger class
 
-Use the `prep()` function to prep your recipe.
+I wanted to give the classifier a feature that could capture differences in survival patterns by sex across passenger classes. I multiplied a female indicator by the numeric passenger-class code and also included an indicator for traveling alone and one for embarking at Southampton.
+
 ```{r}
-rec_rda_2_prep <- rec_rda_2 |> prep(training = data_trn)
-```
+#| label: recipe-3
 
-Use the `bake()` function to generate the feature matrix of the training data.
-```{r}
-feat_rda_2_trn <- rec_rda_2_prep |> bake(NULL)
-```
-
-### Fit your model
-
-Fit a `rda` model predicting `survived` from your training feature matrix
-```{r}
-# use these hyperparamater values:
-# discrim_regularized(frac_common_cov = 0, frac_identity = 0)
-
-fit_rda_2 <-
-  discrim_regularized(frac_common_cov = 0, frac_identity = 0) |>
-  set_engine("klaR") |>
-  fit(survived ~ ., data = feat_rda_2_trn)
-```
-
-### Validation feature matrix
-
-Use `bake()` to generate the feature matrix of the validation data that we will use to assess your model.
-```{r}
-feat_rda_2_val <- rec_rda_2_prep |> bake(data_val)
-```
-
-### Assess your model
-
-Use `accuracy_vec()` to calculate the validation error (accuracy) of your model. Add this value to your validation error tracking tibble.
-```{r}
-acc_rda_2 <- accuracy_vec(
-  feat_rda_2_val$survived,
-  predict(fit_rda_2, feat_rda_2_val, type = "class")$.pred_class)
-
-error_val_rda <- error_val_rda |>
-  filter(model_id != "rda_2") |>
-  add_row(
-    model_id  = "rda_2",
-    recipe_id = "rec_rda_2",
-    accuracy  = acc_rda_2)
-
-error_val_rda
-```
-
-## RDA model configuration 3
-
-Indicate which required model components you are including for your third model (delete ones that do not apply):
-
-*Variable with missingness:* age
-
-*Transformed numeric:* fare_log = log1p(fare)
-
-*Additional feature engineering:* sex × class interaction feature via female_x_pclass = female * pclass
-
-> “women and children first” effect wasn’t uniform across SES. This feature lets the model flex differently by class without making 800 uneccessary dummy columns.
-
-### Set up recipe
-
-Informed by EDA from your modeling EDA, create a recipe for your third model.
-```{r}
 rec_rda_3 <- recipe(
   survived ~ age + fare + sex + pclass + n_sib_spouse + n_parent_child + embarked,
   data = data_trn) |>
@@ -335,62 +109,13 @@ rec_rda_3 <- recipe(
   step_normalize(all_numeric_predictors())
 ```
 
-### Training feature matrix
+### Child indicator
 
-Use the `prep()` function to prep your recipe.
+I tested whether an indicator for passengers under 14 added information alongside continuous age. This exploratory recipe centers age within each split when the features are generated.
+
 ```{r}
-rec_rda_3_prep <- rec_rda_3 |> prep(training = data_trn)
-```
+#| label: recipe-4
 
-Use the `bake()` function to generate the feature matrix of the training data.
-```{r}
-feat_rda_3_trn <- rec_rda_3_prep |> bake(NULL)
-```
-
-
-### Fit your model
-
-Fit a `rda` model predicting `survived` from your training feature matrix.
-```{r}
-# use these hyperparamater values:
-# discrim_regularized(frac_common_cov = 0, frac_identity = 0)
-
-fit_rda_3 <-
-  discrim_regularized(frac_common_cov = 0, frac_identity = 0) |>
-  set_engine("klaR") |>
-  fit(survived ~ ., data = feat_rda_3_trn)
-```
-
-### Validation feature matrix
-
-Use `bake()` to generate the feature matrix of the validation data that we will use to assess your model.
-```{r}
-feat_rda_3_val <- rec_rda_3_prep |> bake(data_val)
-```
-
-### Assess your model
-
-Use `accuracy_vec()` to calculate the validation error (accuracy) of your model. Add this value to your validation error tracking tibble.
-```{r}
-acc_rda_3 <- accuracy_vec(
-  feat_rda_3_val$survived,
-  predict(fit_rda_3, feat_rda_3_val, type = "class")$.pred_class)
-
-error_val_rda <- error_val_rda |>
-  filter(model_id != "rda_3") |>
-  add_row(
-    model_id  = "rda_3",
-    recipe_id = "rec_rda_3",
-    accuracy  = acc_rda_3)
-
-error_val_rda
-```
-
-## Additional model configurations (Optional)
-
-Create as many code chunks as you would like below to test additional RDA model configurations. Record your models' performance in the validation data (accuracy) in your validation error tracking tibble.
-```{r}
-#rda 4; adding an age indicator to decipher children vs parent lets QDA carve a nonlinear boundary without factor dummies
 rec_rda_4 <- recipe(
   survived ~ age + fare + sex + pclass + n_sib_spouse + n_parent_child,
   data = data_trn) |>
@@ -404,108 +129,80 @@ rec_rda_4 <- recipe(
   step_rm(sex, fare, n_sib_spouse, n_parent_child, age) |>
   step_zv(all_predictors()) |>
   step_normalize(all_numeric_predictors())
-
-rec_rda_4_prep <- rec_rda_4 |> prep(training = data_trn)
-
-feat_rda_4_trn <- rec_rda_4_prep |> bake(NULL)
-
-fit_rda_4 <-
-  discrim_regularized(frac_common_cov = 0, frac_identity = 0) |>
-  set_engine("klaR") |>
-  fit(survived ~ ., data = feat_rda_4_trn)
-
-feat_rda_4_val <- rec_rda_4_prep |> bake(data_val)
-
-acc_rda_4 <- accuracy_vec(
-  feat_rda_4_val$survived,
-  predict(fit_rda_4, feat_rda_4_val, type = "class")$.pred_class)
-
-error_val_rda <- error_val_rda |>
-  filter(model_id != "rda_4") |>
-  add_row(
-    model_id  = "rda_4",
-    recipe_id = "rec_rda_4",
-    accuracy  = acc_rda_4)
-
-error_val_rda
 ```
 
-## Predictions
+## Validation results
 
-This section is for generating predictions for your best model in the held-out test set. You should only generate predictions for **one model** out of all KNN and RDA models you fit across both model fitting files. We will use these predictions to generate your ONE estimate of model performance in the held-out data.
+The original course run produced the following validation results. Each configuration changes several predictors, so the table compares complete recipes.
 
-If your **best** model is a RDA (from this script), follow the steps below. If your best model is a KNN (from your other script), skip the next section and **Save & Render** at the end of the document.
+| Configuration | Validation accuracy |
+| --- | ---: |
+| Baseline with family size | 79.7% |
+| Fare per family member and log age | 80.5% |
+| Sex by passenger class | **81.3%** |
+| Child indicator | 80.9% |
 
-### Assign best model
+The code below recomputes the comparison from the local course splits.
 
-If your **best** model is a `rda` from this script, edit the following objects in the code chunk below:
-
-* Assign the model object from your best model to `best_model`
-* Copy and paste the recipe for your best model (created from the training data) to assign to `best_rec` below.
-* Type your last name between the quotation marks of `last_name` (e.g. "janssen") for file naming.
-
-If your best model is a `knn`, don't edit anything in the next two code chunks and skip to the final section to save, render, etc.
 ```{r}
-best_model <- fit_rda_3
-best_rec <- recipe(
-  survived ~ age + fare + sex + pclass + n_sib_spouse + n_parent_child + embarked,
-  data = data_trn) |>
-  step_impute_median(age) |>
-  step_impute_mode(embarked) |>
-  step_mutate(
-    female = if_else(sex == "female", 1, 0),
-    fare_log = log1p(fare),
-    family_size = n_sib_spouse + n_parent_child + 1,
-    is_alone = if_else(family_size == 1, 1, 0),
-    embarked_S = if_else(embarked == "S", 1, 0),
-    female_x_pclass = female * pclass) |>
-  step_rm(fare, sex, embarked, n_sib_spouse, n_parent_child) |>
-  step_zv(all_predictors()) |>
-  step_normalize(all_numeric_predictors())
-last_name <- "dang"
+#| label: validation
+
+fit_and_validate <- function(feature_recipe) {
+  prepared_recipe <- prep(feature_recipe, training = data_trn)
+  train_features <- bake(prepared_recipe, new_data = NULL)
+  validation_features <- bake(prepared_recipe, new_data = data_val)
+
+  model <- fit(qda_spec, survived ~ ., data = train_features)
+  predictions <- predict(model, validation_features, type = "class")
+
+  list(
+    recipe = prepared_recipe,
+    model = model,
+    accuracy = accuracy_vec(validation_features$survived, predictions$.pred_class)
+  )
+}
+
+results <- list(
+  "Baseline with family size" = fit_and_validate(rec_rda_1),
+  "Fare per family member and log age" = fit_and_validate(rec_rda_2),
+  "Sex by passenger class" = fit_and_validate(rec_rda_3),
+  "Child indicator" = fit_and_validate(rec_rda_4)
+)
+
+validation_results <- tibble(
+  configuration = names(results),
+  validation_accuracy = vapply(results, function(result) result$accuracy, numeric(1))
+)
+
+knitr::kable(validation_results, digits = 3)
 ```
 
-### Generate test predictions
+## Held-out predictions
 
-Run this code chunk to save out your best model's predictions of `survived` in the held-out test set. Look over your predictions to confirm your model generated valid predictions for each test observation.
-(If you left `best_model` as NA above, no file will be saved out).
+I submitted the sex-by-passenger-class model, which had the highest validation accuracy among the four QDA recipes. The code applies the same training-fitted recipe to the course test split and writes the predicted survival class for each passenger. The test split’s labels were withheld by the course.
 
-ADVANCED NOTE:  You *could* improve this code below to train an even better model.  If you know what could be improved, do it.  If not, do not worry. This will work well enough (but maybe not for a free lunch!!).  
 ```{r}
-if (!is.null(best_model)){
-  
- # Make test set features with the best recipe
-  rec_prep <- best_rec |> 
-    prep(training = data_trn)
-  
-  feat_test <- rec_prep |> 
-    bake(new_data = data_test)
-  
- # Generate predictions made by the best model
-  test_preds <- data_test |>
-    dplyr::mutate(survived = predict(best_model, feat_test, type = "class")$.pred_class) |>
-    dplyr::select(passenger_id, survived) #passenger_id is the id variable to match predictions
-  
-  # Save predictions as a csv file with your last name in the file name
-   write.csv(test_preds, here::here(path_data,str_c("test_preds_", 
-                                                   last_name,
-                                                   ".csv")))
+#| label: test-predictions
+
+test_file <- "titanic_test_cln.csv"
+unlabeled_test_file <- "titanic_test_cln_no_label.csv"
+
+if (file.exists(file.path(data_dir, unlabeled_test_file))) {
+  test_file <- unlabeled_test_file
+}
+
+if (file.exists(file.path(data_dir, test_file))) {
+  submitted <- results[["Sex by passenger class"]]
+  test_data <- read_split(test_file) |> select(-any_of("survived"))
+  test_features <- bake(submitted$recipe, new_data = test_data)
+
+  test_predictions <- tibble(
+    passenger_id = test_data$passenger_id,
+    survived = predict(submitted$model, test_features, type = "class")$.pred_class
+  )
+
+  write_csv(test_predictions, file.path(data_dir, "test_preds_dang.csv"))
+} else {
+  cat("The course test CSV is optional. No predictions were exported.")
 }
 ```
-
-
-## Save, Render, Upload
-
-### Save
-Save this `.qmd` file with your last name at the end (e.g. `hw_unit_3_rda_janssen.qmd`)
-Make sure you changed "Your name here" at the top of the file to be your own name. 
-
-### Render
-Render the file to html and upload your rendered html file to Canvas. 
-
-### Upload
-Upload your saved `test_preds_(lastname).csv` (if you created it in this script) to Canvas. We will assess everyones predictions in the test set. **The winner gets a free lunch!!!**
-
-Don't forget to complete the KNN portion of this assignment `hw_unit_04_fit_knn.qmd` if you haven't already and submit it to Canvas.
-
-**Way to go!!**
