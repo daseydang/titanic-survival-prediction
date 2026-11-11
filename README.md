@@ -26,9 +26,9 @@ I submitted the QDA model, fitted through the lab’s regularized discriminant a
 
 | File | What it contains |
 | --- | --- |
-| [`hw_unit_04_eda_cleaning.qmd`](hw_unit_04_eda_cleaning.qmd) | Exploratory data analysis and data preparation |
-| [`hw_unit_04_fit_knn_dang.qmd`](hw_unit_04_fit_knn_dang.qmd) | KNN preprocessing recipes, model fitting, and validation results |
-| [`hw_unit_04_fit_rda_dang.qmd`](hw_unit_04_fit_rda_dang.qmd) | Discriminant analysis recipes, validation results, and held-out prediction code |
+| [`eda_cleaning.qmd`](eda_cleaning.qmd) | Exploratory data analysis and data preparation |
+| [`fit_knn.qmd`](fit_knn.qmd) | KNN preprocessing recipes, model fitting, and validation results |
+| [`fit_rda.qmd`](fit_rda_dang.qmd) | Discriminant analysis recipes, validation results, and held-out prediction code |
 
 The analyses use **R, Quarto, and tidymodels**. Start with the data preparation file, then open the two modeling files. Running the original workflow requires the course-provided Titanic files, including the unlabeled test split.
 
